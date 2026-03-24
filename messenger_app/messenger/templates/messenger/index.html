@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Messenger</title>
+  <style>
+    body { font-family: sans-serif; max-width: 620px; margin: 40px auto; padding: 0 16px; }
+    h2 { margin-bottom: 4px; }
+    #status { font-size: 13px; color: #666; margin-bottom: 12px; }
+    #messages { border: 1px solid #ccc; border-radius: 8px; height: 340px;
+                overflow-y: auto; padding: 12px; margin-bottom: 12px; background: #fafafa; }
+    .msg { margin: 6px 0; font-size: 14px; }
+    .msg .label { font-weight: 600; margin-right: 6px; }
+    .msg.sent .label { color: #4f46e5; }
+    .msg.received .label { color: #0891b2; }
+    .msg.system { color: #888; font-style: italic; }
+    .msg.error { color: #dc2626; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid #ccc;
+                       border-radius: 6px; font-size: 14px; }
+    button { padding: 8px 16px; border: none; border-radius: 6px;
+             background: #4f46e5; color: white; cursor: pointer; font-size: 14px; }
+    button:disabled { background: #aaa; cursor: default; }
+  </style>
+</head>
+<body>
+
+  <h2>Messenger</h2>
+  <div id="status">Not connected.</div>
+
+  <!-- Step 1: connect with a username -->
+  <div class="row" id="login-row">
+    <input id="username" type="text" placeholder="Your username" />
+    <button onclick="connect()">Connect</button>
+  </div>
+
+  <div id="messages"></div>
+
+  <!-- Step 2: send a private message -->
+  <div class="row" id="send-row">
+    <input id="recipient" type="text" placeholder="To (username)" disabled />
+    <input id="text-input" type="text" placeholder="Message..." disabled
+           onkeydown="if(event.key==='Enter') send()" />
+    <button id="send-btn" onclick="send()" disabled>Send</button>
+  </div>
+
+  <script>
+    let ws = null;
+    let myName = "";
+
+    function connect() {
+      myName = document.getElementById("username").value.trim();
+      if (!myName) return alert("Enter a username.");
+
+      // This is the only line that changed from the standalone version:
+      // window.location.host gives us the current host (e.g. localhost:8000)
+      // so the URL becomes ws://localhost:8000/ws/messenger/
+      ws = new WebSocket("ws://" + window.location.host + "/ws/messenger/");
+
+      ws.onopen = () => {
+        // First thing after connecting: register our username with the server
+        ws.send(JSON.stringify({ type: "register", username: myName }));
+
+        document.getElementById("status").textContent = `Connected as ${myName}`;
+        document.getElementById("login-row").style.display = "none";
+        document.getElementById("recipient").disabled = false;
+        document.getElementById("text-input").disabled = false;
+        document.getElementById("send-btn").disabled = false;
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === "message") {
+          const isSent = data.from.startsWith("you");
+          addMessage(data.from, data.text, isSent ? "sent" : "received");
+        } else if (data.type === "system") {
+          addMessage("", data.text, "system");
+        } else if (data.type === "error") {
+          addMessage("error", data.text, "error");
+        }
+      };
+
+      ws.onclose = () => {
+        document.getElementById("status").textContent = "Disconnected.";
+        addMessage("", "You have been disconnected.", "system");
+      };
+    }
+
+    function send() {
+      const recipient = document.getElementById("recipient").value.trim();
+      const text = document.getElementById("text-input").value.trim();
+      if (!recipient) return alert("Enter a recipient username.");
+      if (!text || !ws) return;
+
+      ws.send(JSON.stringify({ type: "message", to: recipient, text: text }));
+      document.getElementById("text-input").value = "";
+    }
+
+    function addMessage(label, text, type) {
+      const box = document.getElementById("messages");
+      const div = document.createElement("div");
+      div.className = `msg ${type}`;
+      div.innerHTML = label
+        ? `<span class="label">${label}:</span>${text}`
+        : `<em>${text}</em>`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+  </script>
+
+</body>
+</html>
