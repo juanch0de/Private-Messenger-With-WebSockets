@@ -39,7 +39,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'channels',
-    'messenger'
+    'messenger',
+    'messenger_p2p',
 ]
 
 ASGI_APPLICATION = 'messenger_app.asgi.application'
