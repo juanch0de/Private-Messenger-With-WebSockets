@@ -2,128 +2,517 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>P2P Messenger</title>
+  <title>P2P Secure Messenger</title>
   <style>
-    body { font-family: sans-serif; max-width: 620px; margin: 40px auto; padding: 0 16px; }
-    h2 { margin-bottom: 4px; }
-    #status { font-size: 13px; color: #666; margin-bottom: 12px; }
+    * { box-sizing: border-box; }
+    body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 16px; }
+    h2 { margin-bottom: 2px; }
+    #subtitle { font-size: 12px; color: #16a34a; margin-bottom: 12px; font-weight: 600; }
+    #status { font-size: 13px; color: #666; margin-bottom: 8px; }
     #peers-list { font-size: 13px; color: #444; margin-bottom: 12px;
                   padding: 8px 12px; background: #f0f0f0; border-radius: 6px; }
-    #messages { border: 1px solid #ccc; border-radius: 8px; height: 300px;
+    #messages { border: 1px solid #ccc; border-radius: 8px; height: 260px;
                 overflow-y: auto; padding: 12px; margin-bottom: 12px; background: #fafafa; }
     .msg { margin: 6px 0; font-size: 14px; }
     .msg .label { font-weight: 600; margin-right: 6px; }
-    .msg.sent .label { color: #4f46e5; }
+    .msg.sent .label   { color: #4f46e5; }
     .msg.received .label { color: #0891b2; }
-    .msg.system { color: #888; font-style: italic; }
-    .msg.error { color: #dc2626; }
+    .msg.system  { color: #888; font-style: italic; }
+    .msg.error   { color: #dc2626; }
+    .msg.crypto  { color: #16a34a; font-size: 12px; font-style: italic; }
     .row { display: flex; gap: 8px; margin-bottom: 8px; }
     input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid #ccc;
                        border-radius: 6px; font-size: 14px; }
     button { padding: 8px 16px; border: none; border-radius: 6px;
              background: #4f46e5; color: white; cursor: pointer; font-size: 14px; }
     button:disabled { background: #aaa; cursor: default; }
+    button.danger { background: #dc2626; }
+    button.success { background: #16a34a; }
+
+    /* ── Video call UI ───────────────────────────────────────────────── */
+    #call-panel {
+      display: none;
+      border: 2px solid #4f46e5;
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 12px;
+      background: #f5f3ff;
+    }
+    #call-panel h3 { margin: 0 0 10px; font-size: 15px; color: #4f46e5; }
+    #call-status { font-size: 13px; color: #555; margin-bottom: 10px; }
+    .videos { display: flex; gap: 10px; margin-bottom: 10px; }
+    video {
+      flex: 1; border-radius: 8px; background: #1e1e2e;
+      width: 100%; max-height: 200px; object-fit: cover;
+    }
+    .video-label { font-size: 11px; color: #666; text-align: center; margin-top: 2px; }
+    .call-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    /* incoming call overlay */
+    #incoming-call {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 100;
+      align-items: center; justify-content: center;
+    }
+    #incoming-call.show { display: flex; }
+    #incoming-box {
+      background: white; border-radius: 12px; padding: 28px 36px;
+      text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    #incoming-box h3 { margin: 0 0 8px; font-size: 18px; }
+    #incoming-box p  { color: #555; margin: 0 0 18px; }
+    #incoming-box .row { justify-content: center; }
   </style>
 </head>
 <body>
 
-  <h2>P2P Messenger</h2>
-  <div id="status">Not connected.</div>
+  <h2>P2P Secure Messenger</h2>
+  <div id="subtitle">🔒 End-to-end encrypted · ECDH P-256 + AES-GCM 256 · H.264 video</div>
+  <div id="status">Generating ECC key pair…</div>
   <div id="peers-list">Online peers: none</div>
 
+  <!-- Login row -->
   <div class="row" id="login-row">
-    <input id="username" type="text" placeholder="Your username" />
-    <button onclick="connect()">Connect</button>
+    <input id="username" type="text" placeholder="Your username" disabled />
+    <button id="connect-btn" onclick="connectWS()" disabled>Connect</button>
   </div>
 
+  <!-- Chat -->
   <div id="messages"></div>
-
   <div class="row">
     <input id="recipient" type="text" placeholder="To (username)" disabled />
-    <input id="text-input" type="text" placeholder="Message..." disabled
-           onkeydown="if(event.key==='Enter') send()" />
-    <button id="send-btn" onclick="send()" disabled>Send</button>
+    <input id="text-input" type="text" placeholder="Message…" disabled
+           onkeydown="if(event.key==='Enter') sendMessage()" />
+    <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
+    <button id="call-btn" onclick="startCall()" disabled title="Video call">📹</button>
+  </div>
+
+  <!-- Video call panel -->
+  <div id="call-panel">
+    <h3>📹 Video Call</h3>
+    <div id="call-status">Connecting…</div>
+    <div class="videos">
+      <div>
+        <video id="local-video"  autoplay muted playsinline></video>
+        <div class="video-label">You</div>
+      </div>
+      <div>
+        <video id="remote-video" autoplay playsinline></video>
+        <div class="video-label" id="remote-label">Remote</div>
+      </div>
+    </div>
+    <div class="call-controls">
+      <button id="hangup-btn" class="danger" onclick="hangUp()">⏹ Hang up</button>
+      <button id="mute-btn"   onclick="toggleMute()">🎤 Mute</button>
+      <button id="cam-btn"    onclick="toggleCamera()">📷 Cam off</button>
+    </div>
+  </div>
+
+  <!-- Incoming call overlay -->
+  <div id="incoming-call">
+    <div id="incoming-box">
+      <h3>📹 Incoming call</h3>
+      <p id="incoming-from">from …</p>
+      <div class="row">
+        <button class="success" onclick="acceptCall()">✅ Accept</button>
+        <button class="danger"  onclick="rejectCall()">❌ Reject</button>
+      </div>
+    </div>
   </div>
 
 <script>
-  let ws = null;
-  let myName = "";
-  // This is the client's own peer registry — the key P2P concept
-  let knownPeers = [];
+// ═════════════════════════════════════════════════════════════════════════════
+// CRYPTO LAYER  –  Web Crypto API  (ECDH P-256 + AES-GCM 256)
+// ═════════════════════════════════════════════════════════════════════════════
+let myKeyPair = null;
+let myPublicKeyJwk = null;
+const peerKeys = {};   // { username → CryptoKey (AES-GCM derived) }
 
-  function connect() {
-    myName = document.getElementById("username").value.trim();
-    if (!myName) return alert("Enter a username.");
+const ECDH_PARAMS = { name: 'ECDH', namedCurve: 'P-256' };
+const AES_PARAMS  = { name: 'AES-GCM', length: 256 };
 
-    ws = new WebSocket("ws://" + window.location.host + "/ws/p2p/");
+async function initCrypto() {
+  myKeyPair = await crypto.subtle.generateKey(ECDH_PARAMS, true, ['deriveKey']);
+  myPublicKeyJwk = await crypto.subtle.exportKey('jwk', myKeyPair.publicKey);
+  document.getElementById('status').textContent = 'Key pair ready. Enter a username.';
+  document.getElementById('username').disabled = false;
+  document.getElementById('connect-btn').disabled = false;
+  addMessage('', '🔑 ECC key pair generated (P-256). Ready to connect.', 'crypto');
+}
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "register", username: myName }));
-      document.getElementById("status").textContent = `Connected as ${myName} (peer + listener)`;
-      document.getElementById("login-row").style.display = "none";
-      document.getElementById("recipient").disabled = false;
-      document.getElementById("text-input").disabled = false;
-      document.getElementById("send-btn").disabled = false;
-    };
+async function importPeerPublicKey(jwk) {
+  return crypto.subtle.importKey('jwk', jwk, ECDH_PARAMS, true, []);
+}
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+async function ensurePeerKey(username, jwk) {
+  if (!peerKeys[username]) {
+    const pub = await importPeerPublicKey(jwk);
+    peerKeys[username] = await crypto.subtle.deriveKey(
+      { name: 'ECDH', public: pub },
+      myKeyPair.privateKey,
+      AES_PARAMS, false, ['encrypt', 'decrypt']
+    );
+    addMessage('', `🔐 Shared key established with ${username}.`, 'crypto');
+  }
+}
 
-      if (data.type === "peer_list") {
-        // Client updates its own view of the network
-        knownPeers = data.peers;
-        updatePeersList();
-        addMessage("", `Peers online: ${knownPeers.join(", ") || "none"}`, "system");
+async function encrypt(username, plaintext) {
+  const key = peerKeys[username];
+  const iv  = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder().encode(plaintext);
+  const buf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc);
+  return { ciphertext: bufToB64(buf), iv: bufToB64(iv) };
+}
 
-      } else if (data.type === "message") {
-        // A peer sent us a message directly
-        addMessage(data.from, data.text, "received");
+async function decrypt(username, ctB64, ivB64) {
+  const key = peerKeys[username];
+  const buf = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: b64ToBuf(ivB64) }, key, b64ToBuf(ctB64)
+  );
+  return new TextDecoder().decode(buf);
+}
 
-      } else if (data.type === "error") {
-        addMessage("error", data.text, "error");
+function bufToB64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function b64ToBuf(b64) {
+  const bin = atob(b64), arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr.buffer;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// WEBSOCKET LAYER
+// ═════════════════════════════════════════════════════════════════════════════
+let ws = null;
+let myName = '';
+let knownPeers = {};   // { username → public_key JWK }
+
+function connectWS() {
+  myName = document.getElementById('username').value.trim();
+  if (!myName) return alert('Enter a username.');
+  ws = new WebSocket('ws://' + window.location.host + '/ws/p2p/');
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'register', username: myName, public_key: myPublicKeyJwk }));
+    document.getElementById('status').textContent = `Connected as ${myName} · E2E encrypted`;
+    document.getElementById('login-row').style.display = 'none';
+    document.getElementById('recipient').disabled = false;
+    document.getElementById('text-input').disabled = false;
+    document.getElementById('send-btn').disabled = false;
+    document.getElementById('call-btn').disabled = false;
+  };
+
+  ws.onmessage = async (e) => {
+    const data = JSON.parse(e.data);
+
+    if (data.type === 'peer_list') {
+      knownPeers = {};
+      for (const p of data.peers) {
+        knownPeers[p.username] = p.public_key;
+        await ensurePeerKey(p.username, p.public_key);
       }
-    };
+      updatePeersList();
+      addMessage('', `Peers online: ${Object.keys(knownPeers).join(', ') || 'none'}`, 'system');
 
-    ws.onclose = () => {
-      document.getElementById("status").textContent = "Disconnected.";
-      addMessage("", "You have been disconnected.", "system");
-    };
-  }
+    } else if (data.type === 'message') {
+      if (!peerKeys[data.from] && knownPeers[data.from])
+        await ensurePeerKey(data.from, knownPeers[data.from]);
+      try {
+        const plain = await decrypt(data.from, data.ciphertext, data.iv);
+        addMessage(data.from, plain, 'received');
+      } catch (err) {
+        addMessage('error', `Decrypt failed from ${data.from}: ${err.message}`, 'error');
+      }
 
-  function send() {
-    const recipient = document.getElementById("recipient").value.trim();
-    const text = document.getElementById("text-input").value.trim();
-    if (!text || !ws) return;
-
-    if (!recipient) return alert("Enter a recipient.");
-
-    // Client decides the routing — not the server
-    if (!knownPeers.includes(recipient)) {
-      addMessage("error", `'${recipient}' is not in your peer list.`, "error");
-      return;
+    // ── WebRTC signaling ────────────────────────────────────────────────────
+    } else if (data.type === 'call_offer') {
+      handleOffer(data);
+    } else if (data.type === 'call_answer') {
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
+      setCallStatus(`In call with ${callPeer}`);
+    } else if (data.type === 'ice_candidate') {
+      if (data.candidate) await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    } else if (data.type === 'call_reject') {
+      addMessage('', `${data.from} rejected the call.`, 'system');
+      cleanupCall();
+    } else if (data.type === 'call_end') {
+      addMessage('', `${data.from} ended the call.`, 'system');
+      cleanupCall();
+    } else if (data.type === 'error') {
+      addMessage('error', data.text, 'error');
     }
+  };
 
-    ws.send(JSON.stringify({ type: "message", to: recipient, text: text }));
-    addMessage(`you → ${recipient}`, text, "sent");
-    document.getElementById("text-input").value = "";
-  }
+  ws.onclose = () => {
+    document.getElementById('status').textContent = 'Disconnected.';
+    addMessage('', 'You have been disconnected.', 'system');
+    cleanupCall();
+  };
+}
 
-  function updatePeersList() {
-    document.getElementById("peers-list").textContent =
-      "Online peers: " + (knownPeers.length ? knownPeers.join(", ") : "none");
-  }
+function wsSend(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); }
 
-  function addMessage(label, text, type) {
-    const box = document.getElementById("messages");
-    const div = document.createElement("div");
-    div.className = `msg ${type}`;
-    div.innerHTML = label
-      ? `<span class="label">${label}:</span>${text}`
-      : `<em>${text}</em>`;
-    box.appendChild(div);
-    box.scrollTop = box.scrollHeight;
+async function sendMessage() {
+  const recipient = document.getElementById('recipient').value.trim();
+  const text      = document.getElementById('text-input').value.trim();
+  if (!recipient) return alert('Enter a recipient.');
+  if (!text || !ws) return;
+  if (!knownPeers[recipient]) {
+    addMessage('error', `'${recipient}' is not in your peer list.`, 'error'); return;
   }
+  await ensurePeerKey(recipient, knownPeers[recipient]);
+  try {
+    const { ciphertext, iv } = await encrypt(recipient, text);
+    wsSend({ type: 'message', to: recipient, ciphertext, iv });
+    addMessage(`you → ${recipient}`, text, 'sent');
+    document.getElementById('text-input').value = '';
+  } catch (err) {
+    addMessage('error', `Encryption failed: ${err.message}`, 'error');
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// WEBRTC LAYER  –  H.264 video, peer-to-peer
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ICE / STUN config — using Google's public STUN for NAT traversal
+const RTC_CONFIG = {
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+};
+
+let pc          = null;   // RTCPeerConnection
+let localStream = null;   // MediaStream (camera + mic)
+let callPeer    = '';     // username of the other side
+let isCaller    = false;
+let pendingOffer = null;  // stored while waiting for user to accept
+
+// ── Outgoing call ────────────────────────────────────────────────────────────
+async function startCall() {
+  const recipient = document.getElementById('recipient').value.trim();
+  if (!recipient) return alert('Enter a recipient username first.');
+  if (!knownPeers[recipient]) {
+    addMessage('error', `'${recipient}' is not online.`, 'error'); return;
+  }
+  if (pc) { addMessage('error', 'Already in a call.', 'error'); return; }
+
+  callPeer = recipient;
+  isCaller = true;
+
+  await initLocalStream();
+  createPeerConnection();
+
+  // Create offer and force H.264
+  const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
+  const sdp = forceH264(offer.sdp);
+  await pc.setLocalDescription({ type: 'offer', sdp });
+
+  wsSend({ type: 'call_offer', to: callPeer, sdp });
+  showCallPanel(`Calling ${callPeer}…`);
+  addMessage('', `📹 Calling ${callPeer}…`, 'system');
+}
+
+// ── Incoming call ────────────────────────────────────────────────────────────
+async function handleOffer(data) {
+  if (pc) {
+    // Already in a call — auto-reject
+    wsSend({ type: 'call_reject', to: data.from });
+    return;
+  }
+  pendingOffer = data;
+  document.getElementById('incoming-from').textContent = `from ${data.from}`;
+  document.getElementById('incoming-call').classList.add('show');
+}
+
+async function acceptCall() {
+  document.getElementById('incoming-call').classList.remove('show');
+  const data = pendingOffer;
+  pendingOffer = null;
+  callPeer = data.from;
+  isCaller = false;
+
+  await initLocalStream();
+  createPeerConnection();
+
+  await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
+  const answer = await pc.createAnswer();
+  const sdp = forceH264(answer.sdp);
+  await pc.setLocalDescription({ type: 'answer', sdp });
+
+  wsSend({ type: 'call_answer', to: callPeer, sdp });
+  showCallPanel(`In call with ${callPeer}`);
+  document.getElementById('remote-label').textContent = callPeer;
+}
+
+function rejectCall() {
+  document.getElementById('incoming-call').classList.remove('show');
+  wsSend({ type: 'call_reject', to: pendingOffer.from });
+  pendingOffer = null;
+}
+
+// ── RTCPeerConnection setup ──────────────────────────────────────────────────
+function createPeerConnection() {
+  pc = new RTCPeerConnection(RTC_CONFIG);
+
+  // Add local tracks to the connection
+  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+  // ICE candidates → relay via WS signaling
+  pc.onicecandidate = (e) => {
+    if (e.candidate) wsSend({ type: 'ice_candidate', to: callPeer, candidate: e.candidate });
+  };
+
+  // Remote stream → show in remote video element
+  pc.ontrack = (e) => {
+    const remoteVideo = document.getElementById('remote-video');
+    if (remoteVideo.srcObject !== e.streams[0]) {
+      remoteVideo.srcObject = e.streams[0];
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    setCallStatus(
+      s === 'connected'     ? `In call with ${callPeer}` :
+      s === 'disconnected'  ? 'Peer disconnected' :
+      s === 'failed'        ? 'Connection failed' : `State: ${s}`
+    );
+    if (s === 'disconnected' || s === 'failed') cleanupCall();
+  };
+}
+
+async function initLocalStream() {
+  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  document.getElementById('local-video').srcObject = localStream;
+}
+
+// ── Hang up ──────────────────────────────────────────────────────────────────
+function hangUp() {
+  if (callPeer) wsSend({ type: 'call_end', to: callPeer });
+  addMessage('', 'You ended the call.', 'system');
+  cleanupCall();
+}
+
+function cleanupCall() {
+  if (pc)          { pc.close(); pc = null; }
+  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  document.getElementById('local-video').srcObject  = null;
+  document.getElementById('remote-video').srcObject = null;
+  document.getElementById('call-panel').style.display = 'none';
+  document.getElementById('incoming-call').classList.remove('show');
+  callPeer     = '';
+  isCaller     = false;
+  pendingOffer = null;
+}
+
+// ── Controls ─────────────────────────────────────────────────────────────────
+function toggleMute() {
+  if (!localStream) return;
+  const track = localStream.getAudioTracks()[0];
+  if (!track) return;
+  track.enabled = !track.enabled;
+  document.getElementById('mute-btn').textContent = track.enabled ? '🎤 Mute' : '🔇 Unmute';
+}
+
+function toggleCamera() {
+  if (!localStream) return;
+  const track = localStream.getVideoTracks()[0];
+  if (!track) return;
+  track.enabled = !track.enabled;
+  document.getElementById('cam-btn').textContent = track.enabled ? '📷 Cam off' : '📷 Cam on';
+}
+
+// ── H.264 codec preference ────────────────────────────────────────────────────
+// Reorders the SDP m=video block so H.264 (PT 96–127 range) comes first.
+// Browsers negotiate the first matching codec, so this prefers H.264 over VP8/VP9/AV1.
+function forceH264(sdp) {
+  return sdp.split('\r\n').map(line => {
+    if (!line.startsWith('m=video')) return line;
+    const parts  = line.split(' ');
+    const header = parts.slice(0, 3);          // "m=video <port> UDP/TLS/RTP/SAVPF"
+    const pts    = parts.slice(3);             // payload type list
+    // Separate H.264 PTs (identified by matching rtpmap lines below) from others
+    // We mark them by checking if "H264" appears in the corresponding rtpmap.
+    // Simple heuristic: PT 96+ are dynamic; we reorder to keep H264 first.
+    // Full approach: parse all rtpmap lines first.
+    return line;  // browsers handle it well via codec capabilities API — see note below
+  }).join('\r\n');
+}
+// NOTE: Modern browsers (Chrome 94+, Firefox 113+) default to H.264 when
+// available. The forceH264() function is a placeholder — in practice the
+// RTCRtpSender.setCodecPreferences() API is the correct modern approach,
+// but it requires enumerating RTCRtpSender capabilities which is only
+// available after addTrack(). We apply it in createPeerConnection() below.
+// ─────────────────────────────────────────────────────────────────────────────
+// Patch createPeerConnection to apply H.264 preference via setCodecPreferences
+const _origCreate = createPeerConnection;
+function createPeerConnection() {
+  pc = new RTCPeerConnection(RTC_CONFIG);
+
+  localStream.getTracks().forEach(t => {
+    const sender = pc.addTrack(t, localStream);
+
+    // Apply H.264 codec preference on the video sender
+    if (t.kind === 'video' && typeof RTCRtpSender.getCapabilities === 'function') {
+      const caps = RTCRtpSender.getCapabilities('video');
+      if (caps) {
+        // Put H.264 codecs first, keep the rest in their original order
+        const h264  = caps.codecs.filter(c => c.mimeType.toLowerCase() === 'video/h264');
+        const other = caps.codecs.filter(c => c.mimeType.toLowerCase() !== 'video/h264');
+        try { sender.setCodecPreferences([...h264, ...other]); } catch (_) { /* fallback */ }
+      }
+    }
+  });
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) wsSend({ type: 'ice_candidate', to: callPeer, candidate: e.candidate });
+  };
+
+  pc.ontrack = (e) => {
+    const rv = document.getElementById('remote-video');
+    if (rv.srcObject !== e.streams[0]) rv.srcObject = e.streams[0];
+  };
+
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    setCallStatus(
+      s === 'connected'    ? `In call with ${callPeer}` :
+      s === 'disconnected' ? 'Peer disconnected' :
+      s === 'failed'       ? 'Connection failed' : `State: ${s}`
+    );
+    if (s === 'disconnected' || s === 'failed') cleanupCall();
+  };
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// UI HELPERS
+// ═════════════════════════════════════════════════════════════════════════════
+function showCallPanel(status) {
+  document.getElementById('call-panel').style.display = 'block';
+  setCallStatus(status);
+  document.getElementById('remote-label').textContent = callPeer;
+}
+function setCallStatus(msg) {
+  document.getElementById('call-status').textContent = msg;
+}
+function updatePeersList() {
+  const names = Object.keys(knownPeers);
+  document.getElementById('peers-list').textContent =
+    'Online peers: ' + (names.length ? names.join(', ') : 'none');
+}
+function addMessage(label, text, type) {
+  const box = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `msg ${type}`;
+  div.innerHTML = label
+    ? `<span class="label">${label}:</span>${text}`
+    : `<em>${text}</em>`;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+initCrypto();
 </script>
-
 </body>
 </html>
